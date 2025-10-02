@@ -1,0 +1,1 @@
+# analisador-publicacoes2
