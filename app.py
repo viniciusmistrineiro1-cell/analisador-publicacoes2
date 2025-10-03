@@ -1,58 +1,68 @@
 import pandas as pd
 import re
-
-# === CONFIGURAÇÕES ===
-# Caminhos dos arquivos
-ARQUIVO_PUBLICACOES = "relatorio-8682625-70016.xlsx"
-ARQUIVO_CLASSIFICACAO = "modelo_classificacao.xlsx"
-ARQUIVO_SAIDA = "analise_publicacoes.xlsx"
+import streamlit as st
 
 # === FUNÇÕES AUXILIARES ===
 def extrair_prazo(texto):
-    """Extrai prazos mantendo o texto original (ex: 'prazo de 15 dias', 'prazo comum de 5 dias')."""
+    """Extrai prazos mantendo o texto original (ex: 'prazo de 15 dias')."""
     padrao = r'(?i)(prazo[^.:\n]*)'
     prazos = re.findall(padrao, texto)
     return "; ".join(prazos) if prazos else ""
 
 def classificar_publicacao(texto, df_classificacao):
-    """Retorna Grupo/Teor e Providência resumida com base nas palavras/frases do modelo."""
+    """Retorna Grupo/Teor e Providência resumida com base nas frases do modelo."""
     for _, row in df_classificacao.iterrows():
-        chave = str(row["Palavra-chave"]).strip().lower()
+        chave = str(row["Frase-chave"]).strip().lower()
         if chave in texto.lower():
             return row["Grupo/Teor"], row["Providência resumida"]
     return "", ""  # caso não encontre
 
-# === CARREGAR DADOS ===
-# Publicações
-df = pd.read_excel(ARQUIVO_PUBLICACOES)
+# === CARREGAR MODELO DE CLASSIFICAÇÃO (fixo no repositório) ===
+df_class = pd.read_excel("modelo_classificacao.xlsx")
 
-# Modelo de classificação
-df_classificacao = pd.read_excel(ARQUIVO_CLASSIFICACAO)
+# === INTERFACE STREAMLIT ===
+st.title("📑 Analisador de Publicações")
 
-# === ANÁLISE ===
-resultado = []
-for idx, row in df.iterrows():
-    publicacao = str(row.get("Publicação", ""))
+st.write("Carregue o relatório de publicações para gerar a análise automática.")
 
-    grupo, providencia_resumida = classificar_publicacao(publicacao, df_classificacao)
-    prazo = extrair_prazo(publicacao)
+# Upload do arquivo de publicações
+arquivo_publicacoes = st.file_uploader("📂 Selecione o relatório de publicações (.xlsx)", type=["xlsx"])
 
-    resultado.append({
-        "Nº publicação": idx + 1,
-        "Processo": row.get("Processo", ""),
-        "Nº de incidente": row.get("Incidente", "s/inc"),
-        "Autor": row.get("Parte(s)", "").split(",")[0] if pd.notna(row.get("Parte(s)", "")) else "",
-        "Parte Contrária": "MUNICÍPIO DE SÃO PAULO",
-        "Classificação de processo": row.get("Classificação", ""),
-        "Grupo/Teor": grupo,
-        "Providência resumida": providencia_resumida,
-        "Prazo": prazo,
-        "Providência completa": publicacao
-    })
+if arquivo_publicacoes:
+    # Carregar planilha de publicações
+    df_pub = pd.read_excel(arquivo_publicacoes)
 
-# === EXPORTAR ===
-df_final = pd.DataFrame(resultado)
-df_final.to_excel(ARQUIVO_SAIDA, index=False)
+    resultado = []
+    for idx, row in df_pub.iterrows():
+        publicacao = str(row.get("Publicação", ""))
 
-print(f"Análise concluída! Arquivo salvo em: {ARQUIVO_SAIDA}")
+        grupo, providencia_resumida = classificar_publicacao(publicacao, df_class)
+        prazo = extrair_prazo(publicacao)
 
+        resultado.append({
+            "Nº publicação": idx + 1,
+            "Processo": row.get("Processo", ""),
+            "Nº de incidente": row.get("Incidente", "s/inc"),
+            "Autor": row.get("Parte(s)", "").split(",")[0] if pd.notna(row.get("Parte(s)", "")) else "",
+            "Parte Contrária": "MUNICÍPIO DE SÃO PAULO",
+            "Classificação de processo": row.get("Classificação", ""),
+            "Grupo/Teor": grupo,
+            "Providência resumida": providencia_resumida,
+            "Prazo": prazo,
+            "Providência completa": publicacao
+        })
+
+    df_final = pd.DataFrame(resultado)
+
+    # Mostrar prévia
+    st.subheader("🔎 Pré-visualização da análise")
+    st.dataframe(df_final.head(20))
+
+    # Exportar para download
+    st.subheader("📥 Baixar resultado")
+    st.download_button(
+        label="⬇️ Download Excel",
+        data=df_final.to_excel(index=False, engine="openpyxl"),
+        file_name="analise_publicacoes.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
