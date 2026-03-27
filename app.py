@@ -2,6 +2,7 @@ import pandas as pd
 import re
 import unicodedata
 import streamlit as st
+from io import BytesIO
 
 # === FUNÇÕES AUXILIARES ===
 def normalizar_texto(texto):
@@ -20,9 +21,7 @@ def extrair_prazo(texto):
 def carregar_modelo_classificacao(df_class):
     """
     Constrói um dicionário de busca a partir do DataFrame de classificação.
-    A chave é a palavra-chave normalizada, e o valor é uma tupla (grupo, providência).
     """
-    # Identifica as colunas (pode ser que os nomes tenham pequenas diferenças)
     col_chave = None
     col_grupo = None
     col_providencia = None
@@ -39,7 +38,6 @@ def carregar_modelo_classificacao(df_class):
         st.error("❌ O arquivo de classificação não possui as colunas esperadas.")
         st.stop()
 
-    # Constrói o dicionário de busca
     busca = {}
     for _, row in df_class.iterrows():
         chave = str(row[col_chave]).strip()
@@ -52,19 +50,15 @@ def carregar_modelo_classificacao(df_class):
     return busca
 
 def classificar_publicacao(texto, busca):
-    """
-    Retorna Grupo/Teor e Providência resumida com base no dicionário de busca.
-    Usa regex com limites de palavra para evitar falsos positivos.
-    """
+    """Retorna Grupo/Teor e Providência com busca por palavra inteira."""
     texto_norm = normalizar_texto(texto)
     for chave_norm, (grupo, providencia) in busca.items():
-        # Busca a palavra-chave como palavra inteira
         padrao = r'\b' + re.escape(chave_norm) + r'\b'
         if re.search(padrao, texto_norm):
             return grupo, providencia
-    return "", ""  # caso não encontre
+    return "", ""
 
-# === CARREGAR MODELO DE CLASSIFICAÇÃO ===
+# === CARREGAR MODELO DE CLASSIFICAÇÃO (fixo) ===
 df_class = pd.read_excel("modelo_classificacao.xlsx")
 busca_classificacao = carregar_modelo_classificacao(df_class)
 
@@ -78,19 +72,30 @@ if arquivo_publicacoes:
     # Carregar planilha de publicações
     df_pub = pd.read_excel(arquivo_publicacoes)
 
-    # Exibir as colunas encontradas para diagnóstico
+    # Verificar se o arquivo tem colunas compatíveis com um relatório de publicações
+    colunas_publicacao = ["publicação", "intimação", "texto", "despacho", "conteúdo"]
+    tem_coluna_texto = any(col.lower() in colunas_publicacao for col in df_pub.columns)
+    tem_processo = "Processo" in df_pub.columns
+
+    if not tem_coluna_texto or not tem_processo:
+        st.error("""
+        ❌ **Arquivo inválido** – parece que você carregou o arquivo de regras em vez do relatório de publicações.
+        
+        Por favor, carregue o arquivo com as publicações (contém as colunas 'Processo' e 'Intimação' ou similar).
+        """)
+        st.stop()
+
+    # Exibir as colunas encontradas (apenas para diagnóstico)
     st.write("**Colunas encontradas no relatório:**", list(df_pub.columns))
 
-    # Mapeamento de colunas obrigatórias (pode personalizar)
-    # Tenta identificar a coluna que contém o texto principal
+    # Identificar a coluna de texto (primeira que pareça ser o conteúdo da publicação)
     col_texto = None
-    possiveis_nomes = ["publicação", "intimação", "texto", "despacho", "conteúdo"]
     for col in df_pub.columns:
-        if col.lower() in possiveis_nomes:
+        if col.lower() in colunas_publicacao:
             col_texto = col
             break
     if col_texto is None:
-        # Se não encontrou, assume a primeira coluna que não seja 'processo' ou 'parte(s)'
+        # Se não encontrou, usa a primeira coluna que não seja 'Processo' ou 'Parte(s)'
         for col in df_pub.columns:
             if "processo" not in col.lower() and "parte" not in col.lower():
                 col_texto = col
@@ -100,7 +105,7 @@ if arquivo_publicacoes:
         st.error("❌ Não foi possível identificar a coluna com o texto da publicação.")
         st.stop()
 
-    # Nomes das colunas de metadados (opcionais)
+    # Mapeamento das colunas de metadados
     col_processo = "Processo" if "Processo" in df_pub.columns else None
     col_parte = "Parte(s)" if "Parte(s)" in df_pub.columns else None
     col_incidente = "Incidente" if "Incidente" in df_pub.columns else None
@@ -132,7 +137,6 @@ if arquivo_publicacoes:
                 "Providência completa": publicacao
             })
         except Exception as e:
-            # Log do erro para depuração, mas continua processando
             st.warning(f"Erro ao processar linha {idx}: {e}")
             continue
 
@@ -146,9 +150,14 @@ if arquivo_publicacoes:
     st.subheader("🔎 Pré-visualização da análise")
     st.dataframe(df_final.head(20))
 
-    # Exportar para download
+    # Gerar o arquivo Excel em memória
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_final.to_excel(writer, index=False, sheet_name="Análise")
+    output.seek(0)
+
+    # Botão de download
     st.subheader("📥 Baixar resultado")
-    output = df_final.to_excel(index=False, engine="openpyxl")
     st.download_button(
         label="⬇️ Download Excel",
         data=output,
